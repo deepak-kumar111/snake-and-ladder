@@ -1,0 +1,124 @@
+
+<div class="h-screen w-screen bg-slate-900 text-white overflow-hidden flex flex-col relative">
+  
+  <!-- Minimal Header / HUD Top -->
+  <div class="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-30 pointer-events-none">
+    <div class="pointer-events-auto bg-slate-900/80 backdrop-blur rounded-full px-4 py-1 border border-slate-700 shadow-lg flex items-center gap-2">
+       <span class="text-xl">🐍</span>
+       <span class="font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent hidden md:inline">
+         Gemini Snake & Ladders
+       </span>
+    </div>
+
+    @if (gameService.state().gameStatus !== 'setup') {
+      <button 
+        (click)="gameService.resetToSetup()" 
+        class="pointer-events-auto bg-slate-800/80 hover:bg-red-900/80 px-3 py-1 rounded border border-slate-600 text-xs text-slate-300 transition-colors"
+      >
+        Quit
+      </button>
+    }
+  </div>
+
+  <main class="flex-1 relative bg-slate-950 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-900 to-slate-950 overflow-hidden">
+    
+    @if (gameService.state().gameStatus === 'setup') {
+      <!-- Scrollable Setup Container -->
+      <!-- absolute inset-0 ensures it takes full space of main. overflow-y-auto enables scrolling. -->
+      <div class="absolute inset-0 overflow-y-auto overflow-x-hidden z-40 bg-slate-900/95 backdrop-blur-sm custom-scrollbar">
+         <!-- min-h-full ensures flex centering works without clipping when content is large -->
+         <div class="min-h-full w-full flex items-center justify-center p-4 py-20">
+            <app-setup class="w-full max-w-3xl"></app-setup>
+         </div>
+      </div>
+    } 
+    
+    @else {
+      <!-- GAME VIEW -->
+      <div class="w-full h-full flex items-center justify-center relative">
+        <!-- THE BOARD (Centered, scaled) -->
+        <div class="z-10 relative transition-all duration-500">
+           <app-board></app-board>
+        </div>
+
+        <!-- HUD: Player List (Top Left / Side) -->
+        <div class="absolute top-20 left-4 z-20 flex flex-col gap-3 pointer-events-none max-h-[calc(100vh-100px)] overflow-y-auto no-scrollbar">
+           @for (player of gameService.state().players; track player.id) {
+              <div 
+                class="flex items-center gap-2 bg-slate-900/80 backdrop-blur p-2 rounded-full border border-slate-700 shadow-lg transition-all duration-300 pointer-events-auto w-fit"
+                [class.ring-2]="gameService.state().currentPlayerIndex === $index"
+                [class.ring-offset-2]="gameService.state().currentPlayerIndex === $index"
+                [style.borderColor]="player.color"
+                [style.boxShadow]="gameService.state().currentPlayerIndex === $index ? '0 0 15px ' + player.color : ''"
+              >
+                 <img [src]="player.avatarUrl" class="w-8 h-8 md:w-10 md:h-10 rounded-full bg-black object-cover">
+                 <div class="pr-2">
+                    <div class="text-xs font-bold" [style.color]="player.color">{{ player.name }}</div>
+                    <div class="text-[10px] text-slate-400">
+                       Pos: {{ player.position }}
+                       @if (!player.hasStarted) { (Base) }
+                    </div>
+                 </div>
+                 @if (gameService.state().currentPlayerIndex === $index) {
+                     <div class="text-lg animate-spin">🎲</div>
+                 }
+              </div>
+           }
+        </div>
+
+        <!-- HUD: Dice & Controls (Bottom Right) -->
+        <div class="absolute bottom-8 right-8 z-30 flex flex-col items-end gap-4 pointer-events-none">
+            
+            <!-- Last Log Toast -->
+            @if (gameService.state().logs.length > 0) {
+                <div class="pointer-events-auto bg-black/60 backdrop-blur px-4 py-2 rounded-lg border-l-4 border-yellow-500 max-w-xs text-right">
+                    <p class="text-xs text-yellow-500 font-bold mb-1">LATEST ACTION</p>
+                    <p class="text-sm text-white">{{ gameService.state().logs[0] }}</p>
+                </div>
+            }
+
+            <!-- Dice Button -->
+             @if (gameService.state().gameStatus === 'finished') {
+                 <div class="pointer-events-auto text-center bg-slate-900/90 p-6 rounded-2xl border-2 border-yellow-500 shadow-2xl animate-bounce">
+                     <div class="text-4xl">🏆</div>
+                     <div class="text-xl font-bold text-yellow-400 my-2">WINNER!</div>
+                     <div class="text-white text-lg mb-4">{{ gameService.state().winner?.name }}</div>
+                     <button (click)="gameService.restartGame()" class="px-6 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-full font-bold shadow-lg">Play Again</button>
+                 </div>
+             } @else {
+                <div class="pointer-events-auto flex flex-col items-center">
+                    <div class="text-xs font-bold text-white mb-2 bg-slate-900/80 px-2 py-1 rounded shadow text-center" [style.color]="gameService.currentPlayer().color">
+                        {{ gameService.currentPlayer().name }}'s Turn
+                        <div class="text-[9px] opacity-70">
+                            {{ gameService.isPlayerLocal(gameService.currentPlayer()) ? '(YOU)' : '(WAIT)' }}
+                        </div>
+                    </div>
+                    
+                    @let isMyTurn = gameService.isPlayerLocal(gameService.currentPlayer());
+                    
+                    <button 
+                      (click)="gameService.rollDice()"
+                      [disabled]="!isMyTurn"
+                      [class.opacity-50]="!isMyTurn"
+                      [class.cursor-not-allowed]="!isMyTurn"
+                      [class.hover:bg-slate-700]="isMyTurn"
+                      class="relative w-24 h-24 md:w-32 md:h-32 bg-slate-800 rounded-3xl shadow-[0_8px_0_rgb(15,23,42)] active:shadow-none active:translate-y-[8px] transition-all border-4 border-slate-600 hover:border-violet-500 group flex items-center justify-center overflow-hidden"
+                    >
+                       <div class="text-5xl md:text-7xl font-black text-white group-hover:scale-110 transition-transform z-10">
+                          @if (gameService.state().lastDiceRoll) {
+                              {{ gameService.state().lastDiceRoll }}
+                          } @else {
+                              🎲
+                          }
+                       </div>
+                       <div class="absolute bottom-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                           {{ isMyTurn ? 'ROLL' : 'WAIT' }}
+                       </div>
+                    </button>
+                </div>
+             }
+        </div>
+      </div>
+    }
+  </main>
+</div>

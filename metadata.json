@@ -1,0 +1,5 @@
+{
+  "name": "Snake & Ladders",
+  "description": "A multiplayer Snake and Ladder game where you can generate custom AI avatars using Gemini. Features dynamic game commentary and classic 'cut' rules.",
+  "requestFramePermissions": []
+}
