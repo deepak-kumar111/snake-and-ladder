@@ -24,9 +24,7 @@
     
     @if (gameService.state().gameStatus === 'setup') {
       <!-- Scrollable Setup Container -->
-      <!-- absolute inset-0 ensures it takes full space of main. overflow-y-auto enables scrolling. -->
       <div class="absolute inset-0 overflow-y-auto overflow-x-hidden z-40 bg-slate-900/95 backdrop-blur-sm custom-scrollbar">
-         <!-- min-h-full ensures flex centering works without clipping when content is large -->
          <div class="min-h-full w-full flex items-center justify-center p-4 py-20">
             <app-setup class="w-full max-w-3xl"></app-setup>
          </div>
@@ -54,9 +52,10 @@
                  <img [src]="player.avatarUrl" class="w-8 h-8 md:w-10 md:h-10 rounded-full bg-black object-cover">
                  <div class="pr-2">
                     <div class="text-xs font-bold" [style.color]="player.color">{{ player.name }}</div>
-                    <div class="text-[10px] text-slate-400">
-                       Pos: {{ player.position }}
-                       @if (!player.hasStarted) { (Base) }
+                    <div class="text-[10px] text-slate-400 flex gap-1">
+                       <span>Pos: {{ player.position }}</span>
+                       @if (player.reachedTop) { <span class="text-yellow-400 font-bold">↵(Returning)</span> }
+                       @else if (!player.hasStarted) { (Base) }
                     </div>
                  </div>
                  @if (gameService.state().currentPlayerIndex === $index) {
@@ -69,11 +68,15 @@
         <!-- HUD: Dice & Controls (Bottom Right) -->
         <div class="absolute bottom-8 right-8 z-30 flex flex-col items-end gap-4 pointer-events-none">
             
-            <!-- Last Log Toast -->
+            <!-- Last 3 Logs -->
             @if (gameService.state().logs.length > 0) {
-                <div class="pointer-events-auto bg-black/60 backdrop-blur px-4 py-2 rounded-lg border-l-4 border-yellow-500 max-w-xs text-right">
-                    <p class="text-xs text-yellow-500 font-bold mb-1">LATEST ACTION</p>
-                    <p class="text-sm text-white">{{ gameService.state().logs[0] }}</p>
+                <div class="pointer-events-auto bg-black/60 backdrop-blur px-4 py-3 rounded-lg border-l-4 border-yellow-500 max-w-xs text-right flex flex-col gap-1">
+                    <p class="text-xs text-yellow-500 font-bold mb-1 uppercase tracking-wider">Game Feed</p>
+                    @for (log of gameService.state().logs.slice(0, 3); track $index) {
+                        <p class="text-sm text-white border-b border-white/10 last:border-0 pb-1 last:pb-0" [class.opacity-50]="$index > 0">
+                            {{ log }}
+                        </p>
+                    }
                 </div>
             }
 

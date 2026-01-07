@@ -9,10 +9,11 @@ export interface Player {
   avatarUrl: string;
   position: number;
   hasStarted: boolean;
+  reachedTop: boolean; // New flag for the return trip
   color: string;
   skipNextTurn: boolean;
-  isLocal: boolean; // UI Flag
-  ownerId: string;  // Unique Peer ID (or 'HOST'/'BOT')
+  isLocal: boolean; 
+  ownerId: string;  
 }
 
 export interface GameState {
@@ -84,29 +85,20 @@ export class GameService {
   
   // Helper to determine if the current device controls this player
   isPlayerLocal(player: Player): boolean {
-      // If offline, everyone is local
       if (!this.onlineService.isConnected()) return true;
-
       const myId = this.onlineService.myPeerId();
-      
-      // Host Logic
       if (this.onlineService.isHost()) {
-          // Host controls 'HOST' players and their own ID
           return player.ownerId === 'HOST' || player.ownerId === myId;
       } 
-      
-      // Client Logic
       if (myId) {
         return player.ownerId === myId;
       }
-      
       return false;
   }
   
   constructor() {
     // Setup Online Listeners
     this.onlineService.onStateReceived = (newState: GameState) => {
-        // As a client, we calculate isLocal for UI purposes based on our ID
         const myId = this.onlineService.myPeerId();
         const playersWithLocalFlag = newState.players.map(p => ({
             ...p,
@@ -121,40 +113,28 @@ export class GameService {
 
     this.onlineService.onPlayerJoined = (payload: { name: string, avatarUrl: string, color: string, ownerId: string }) => {
         console.log('Host: Adding remote player:', payload.name, payload.ownerId);
-        
-        // Check if player already exists (reconnect scenario)
         const exists = this.state().players.find(p => p.ownerId === payload.ownerId);
         if (exists) {
-            console.log('Host: Player already exists, ignoring add.');
-            // Force broadcast to ensure this reconnected player gets the state
             this.broadcastIfHost(); 
             return;
         }
-
         this.addPlayer(payload.name, payload.avatarUrl, payload.color, false, payload.ownerId);
     };
 
     this.onlineService.onNewPeerConnected = (conn: any) => {
-        console.log('Host: New Peer Connected. Syncing current state.');
         const s = this.state();
         this.onlineService.sendDirect(conn, s);
     };
 
-    // Host Logic: Receive Actions from Clients
     this.onlineService.onActionReceived = (action: string, data: any, senderId: string) => {
         if (!this.onlineService.isHost()) return;
 
         if (action === 'ROLL') {
-            // VALIDATION: Ensure the sender is actually the current player
             const currentP = this.currentPlayer();
             if (currentP.ownerId !== senderId) {
-                console.warn(`Host: REJECTED ROLL. Turn owner: ${currentP.ownerId}. Sender: ${senderId}`);
-                // If the client thinks it's their turn but it's not, they are desynced.
-                // We broadcast the state to fix them.
                 this.broadcastIfHost();
                 return;
             }
-            
             this.processDiceRoll();
         }
         if (action === 'RESTART') {
@@ -163,7 +143,6 @@ export class GameService {
     };
   }
 
-  // Helper to broadcast if host
   private broadcastIfHost() {
       if (this.onlineService.isHost()) {
           const s = this.state();
@@ -171,25 +150,20 @@ export class GameService {
       }
   }
 
-  // Actions
   addPlayer(name: string, avatarUrl: string, color: string, isLocal = true, specificOwnerId?: string) {
     const myId = this.onlineService.myPeerId();
-    // If specificOwnerId is provided (from remote join), use it. 
-    // Otherwise, if local, use myId. If offline local, use 'HOST'.
     const ownerId = specificOwnerId || (isLocal ? (myId || 'HOST') : 'BOT');
 
-    // Client Logic: If connected and not host, send request instead of adding locally
     if (this.onlineService.isConnected() && !this.onlineService.isHost() && isLocal) {
         this.onlineService.sendPlayerJoin({ 
             name, 
             avatarUrl, 
             color,
-            ownerId: myId // Send my ID so Host knows who I am
+            ownerId: myId
         });
         return; 
     }
 
-    // Host/Offline Logic: Add to state
     this.state.update(s => ({
       ...s,
       players: [...s.players, {
@@ -198,6 +172,7 @@ export class GameService {
         avatarUrl,
         position: 0,
         hasStarted: false,
+        reachedTop: false,
         color,
         skipNextTurn: false,
         isLocal: isLocal, 
@@ -210,50 +185,38 @@ export class GameService {
 
   startGame() {
     if (this.state().players.length < 2) return;
-    this.state.update(s => ({ ...s, gameStatus: 'playing', logs: ['Game Started!'] }));
+    this.state.update(s => ({ ...s, gameStatus: 'playing', logs: ['Game Started! Reach 100 then back to 1!'] }));
     this.broadcastIfHost();
   }
 
-  // UI Trigger: Handled by button click
   async rollDice() {
     const s = this.state();
     const currentP = s.players[s.currentPlayerIndex];
-    
-    // Check ownership
     const isLocal = this.isPlayerLocal(currentP);
 
     if (this.onlineService.isConnected()) {
-        if (!isLocal) {
-            console.warn(`Not your turn! It is ${currentP.name}'s turn. I am ${this.onlineService.myPeerId()}`);
-            return;
-        }
-
-        // If Client, send action to Host
+        if (!isLocal) return;
         if (!this.onlineService.isHost()) {
             this.onlineService.sendAction('ROLL');
             return; 
         }
     }
-
-    // If Host or Local Offline, process immediately
     this.processDiceRoll();
   }
 
-  // Core Game Logic (Executed by Host or Local Offline)
-  private processDiceRoll() {
+  private async processDiceRoll() {
     try {
         const s = this.state();
         if (s.gameStatus !== 'playing') return;
         
         const currentP = s.players[s.currentPlayerIndex];
-        console.log(`Processing Roll for ${currentP.name} (Index: ${s.currentPlayerIndex})`);
 
-        // Skip Turn Logic
+        // Skip Turn Check
         if (currentP.skipNextTurn) {
             this.state.update(curr => ({
                 ...curr,
                 players: curr.players.map(p => p.id === currentP.id ? { ...p, skipNextTurn: false } : p),
-                logs: [`${currentP.name} is frozen!`, ...curr.logs]
+                logs: [`${currentP.name} is frozen and skips!`, ...curr.logs]
             }));
             this.passTurn();
             return;
@@ -262,176 +225,239 @@ export class GameService {
         const roll = Math.floor(Math.random() * 6) + 1;
         let newPosition = currentP.position;
         let hasStarted = currentP.hasStarted;
+        let reachedTop = currentP.reachedTop;
         let message = '';
+        
+        // 1. Initial Move Calculation
+        if (!hasStarted) {
+            if (roll === 6) {
+                hasStarted = true;
+                newPosition = 1;
+                message = `${currentP.name} rolled 6! Entered the board.`;
+            } else {
+                message = `${currentP.name} rolled ${roll}. Needs 6 to start.`;
+            }
+        } else {
+            // Direction Logic: +1 if going up, -1 if going down (after reaching 100)
+            const direction = reachedTop ? -1 : 1;
+            let potentialPos = newPosition + (roll * direction);
+
+            // Handle Turning Point (100)
+            if (!reachedTop) {
+                if (potentialPos >= 100) {
+                    const excess = potentialPos - 100;
+                    potentialPos = 100 - excess; // Bounce back immediately implies turning around
+                    reachedTop = true;
+                    message = `${currentP.name} Hit 100! Turning back to 1!`;
+                } else {
+                     message = `${currentP.name} rolled ${roll} to ${potentialPos}.`;
+                }
+            } else {
+                // Going Down
+                message = `${currentP.name} rolled ${roll} (returning) to ${potentialPos}.`;
+            }
+            
+            newPosition = potentialPos;
+        }
+
+        // 2. Commit the Physical Move (Step 1)
+        // We update state here so the piece moves to the tile BEFORE resolving snakes/ladders
+        this.updatePlayerState(currentP.id, { position: newPosition, hasStarted, reachedTop });
+        this.updateLogs(message, roll);
+        this.broadcastIfHost(); // Show movement to tile
+
+        // If not started or standard move, checks happen now
+        if (!hasStarted) {
+             if (roll === 6) { /* Keep turn */ } else { this.passTurn(); return; }
+        }
+
+        // Wait for animation frame of landing on the tile
+        await new Promise(resolve => setTimeout(resolve, 600));
+
+        // 3. Check Interactions (Snakes/Ladders/Special)
         let eventType: 'move' | 'snake' | 'ladder' | 'win' | 'collision' | null = null;
         let eventDetail = '';
         let specialEffect: string | null = null;
+        let finalPosition = newPosition;
 
-        // Game Logic
-        if (!hasStarted) {
-        if (roll === 6) {
-            hasStarted = true;
-            newPosition = 1;
-            message = `${currentP.name} rolled 6! Enter!`;
-        } else {
-            message = `${currentP.name} rolled ${roll}. Needs 6.`;
-        }
-        } else {
-        const potentialPos = newPosition + roll;
-        if (potentialPos <= 100) {
-            newPosition = potentialPos;
-            message = `${currentP.name} rolled ${roll} to ${newPosition}.`;
-            
-            // 1. Check for Snake/Ladder FIRST
-            if (LADDERS[newPosition]) {
-            newPosition = LADDERS[newPosition];
-            message += ` Ladder! -> ${newPosition}.`;
+        // Snake / Ladder Check
+        // Note: Ladders move you UP (index increases), Snakes move you DOWN (index decreases)
+        // This applies regardless of player direction.
+        // If returning (going down), a Ladder is BAD (moves you back up to 100).
+        // If returning, a Snake is GOOD (moves you down to 1).
+        
+        if (LADDERS[newPosition]) {
+            finalPosition = LADDERS[newPosition];
+            message = ` LADDER! Climbing to ${finalPosition}.`;
             eventType = 'ladder';
-            eventDetail = newPosition.toString();
-            } 
-            else if (SNAKES[newPosition]) {
-            const oldPos = newPosition;
-            newPosition = SNAKES[newPosition];
-            message += ` Snake! -> ${newPosition}.`;
+            eventDetail = finalPosition.toString();
+        } else if (SNAKES[newPosition]) {
+            const oldPos = finalPosition;
+            finalPosition = SNAKES[newPosition];
+            message = ` SNAKE! Sliding to ${finalPosition}.`;
             eventType = 'snake';
             eventDetail = oldPos.toString();
-            }
-
-            // 2. Check for Special Squares
-            if (SPECIAL_SQUARES[newPosition]) {
-                const effect = SPECIAL_SQUARES[newPosition];
-                specialEffect = effect;
-                
-                switch (effect) {
-                    case 'boost':
-                        newPosition = Math.min(100, newPosition + 5);
-                        message += ` Boost! +5`;
-                        break;
-                    case 'trap':
-                        newPosition = Math.max(1, newPosition - 5);
-                        message += ` Trap! -5`;
-                        break;
-                    case 'freeze':
-                        message += ` Frozen next turn!`;
-                        break;
-                    case 'double':
-                        message += ` Roll Again!`;
-                        break;
-                }
-            }
-
-        } else {
-            message = `${currentP.name} rolled ${roll}. Too high!`;
-        }
         }
 
-        // Collision Check
-        const nextPlayers = s.players.map(p => {
-            if (p.id === currentP.id) {
-                return { 
-                    ...p, 
-                    position: newPosition, 
-                    hasStarted,
-                    skipNextTurn: specialEffect === 'freeze' ? true : false
-                };
-            }
-            return p;
-        });
-
-        if (newPosition > 0) {
-            const otherPlayerIndex = nextPlayers.findIndex(p => p.id !== currentP.id && p.position === newPosition && p.hasStarted);
-            if (otherPlayerIndex !== -1) {
-                const victim = nextPlayers[otherPlayerIndex];
-                nextPlayers[otherPlayerIndex] = { ...victim, position: 0, hasStarted: false };
-                message += ` Kicked ${victim.name}!`;
-                eventType = 'collision';
-            }
+        // If interaction occurred, Animate it
+        if (finalPosition !== newPosition) {
+            this.updatePlayerState(currentP.id, { position: finalPosition });
+            this.updateLogs(message, null);
+            this.broadcastIfHost();
+            // Wait for snake/ladder animation
+            await new Promise(resolve => setTimeout(resolve, 800));
         }
 
-        // Win Check
-        let winner: Player | null = null;
-        let nextStatus: GameState['gameStatus'] = s.gameStatus;
-        
-        if (newPosition === 100) {
-            winner = nextPlayers.find(p => p.id === currentP.id) || null;
-            nextStatus = 'finished';
-            message = `${currentP.name} WINS!`;
-            eventType = 'win';
-        }
-
-        // Update State
-        this.state.update(current => ({
-        ...current,
-        players: nextPlayers,
-        lastDiceRoll: roll,
-        logs: [message, ...current.logs].slice(0, 10),
-        gameStatus: nextStatus,
-        winner
-        }));
-
-        // AI Commentary
-        if (eventType) {
-            this.geminiService.generateCommentary(currentP.name, eventType, eventDetail).then(comment => {
-                if (comment) {
-                    this.state.update(curr => ({ ...curr, commentary: comment }));
-                    this.broadcastIfHost();
-                }
-            });
-        }
-
-        // Turn Management
-        if (nextStatus !== 'finished') {
-            const isDoubleRoll = specialEffect === 'double';
-            const rolledSix = roll === 6; 
-            
-            let keepTurn = false;
-            
-            if (!hasStarted) {
-                if (roll === 6) keepTurn = true;
-            } else {
-                if (rolledSix || isDoubleRoll) keepTurn = true;
+        // Special Squares
+        if (SPECIAL_SQUARES[finalPosition]) {
+            specialEffect = SPECIAL_SQUARES[finalPosition];
+             switch (specialEffect) {
+                case 'boost':
+                    // Boost moves towards 100 if going up, towards 1 if going down?
+                    // Let's keep it simple: Boost always +5 index (Up), Trap always -5 index (Down).
+                    // Or contextual? Let's make it index based to avoid confusion.
+                    // Boost = Index + 5. (Good for going up, Bad for going down).
+                    finalPosition = Math.min(100, finalPosition + 5);
+                    message = ` BOOST! (+5) -> ${finalPosition}`;
+                    break;
+                case 'trap':
+                    finalPosition = Math.max(1, finalPosition - 5);
+                    message = ` TRAP! (-5) -> ${finalPosition}`;
+                    break;
+                case 'freeze':
+                    message = ` FROZEN! Skip next turn.`;
+                    break;
+                case 'double':
+                    message = ` LUCKY! Roll again.`;
+                    break;
             }
-
-            if (!keepTurn) {
-                this.passTurn();
-            } else {
-                this.state.update(curr => ({ ...curr, logs: [`${currentP.name} rolls again!`, ...curr.logs] }));
+            if (finalPosition !== newPosition) {
+                this.updatePlayerState(currentP.id, { position: finalPosition });
+                this.updateLogs(message, null);
                 this.broadcastIfHost();
             }
+        }
+
+        // 4. Collision Check
+        // If we land on another player, send them to start.
+        // New Rule: They go to 1, and hasStarted = true.
+        const currentState = this.state();
+        const victims = currentState.players.filter(p => p.id !== currentP.id && p.position === finalPosition && p.hasStarted && finalPosition !== 0 && finalPosition !== 100);
+        
+        if (victims.length > 0) {
+            const updatedPlayers = currentState.players.map(p => {
+                if (victims.find(v => v.id === p.id)) {
+                    return { 
+                        ...p, 
+                        position: 1, 
+                        hasStarted: true, // Don't need 6
+                        reachedTop: false, // Reset trip
+                        skipNextTurn: false 
+                    };
+                }
+                if (p.id === currentP.id) {
+                     return { 
+                        ...p, 
+                        skipNextTurn: specialEffect === 'freeze' ? true : false 
+                    };
+                }
+                return p;
+            });
+            
+            message = ` CRASH! Sent ${victims.map(v => v.name).join(', ')} back to 1!`;
+            this.state.update(s => ({ ...s, players: updatedPlayers, logs: [message, ...s.logs].slice(0, 15) }));
+            this.broadcastIfHost();
+            eventType = 'collision';
         } else {
+            // Just update skip flag if no collision logic overrode it
+            if (specialEffect === 'freeze') {
+                 this.updatePlayerState(currentP.id, { skipNextTurn: true });
+            }
+        }
+
+        // 5. Win Condition
+        // Must return to 1.
+        if (reachedTop && finalPosition <= 1) {
+            this.state.update(s => ({
+                ...s,
+                gameStatus: 'finished',
+                winner: currentP,
+                logs: [`${currentP.name} RETURNED TO 1 AND WON!`, ...s.logs]
+            }));
+            this.geminiService.generateCommentary(currentP.name, 'win', '1').then(c => this.updateCommentary(c));
+            this.broadcastIfHost();
+            return;
+        }
+
+        // 6. Turn Management
+        if (eventType && eventType !== 'move') {
+             this.geminiService.generateCommentary(currentP.name, eventType, eventDetail).then(c => this.updateCommentary(c));
+        }
+
+        const isDoubleRoll = specialEffect === 'double';
+        const rolledSix = roll === 6; 
+        
+        let keepTurn = false;
+        
+        // Classic rule: Roll 6 = extra turn. Double square = extra turn.
+        if (hasStarted && (rolledSix || isDoubleRoll)) keepTurn = true;
+        // If just started with 6, keep turn
+        if (!hasStarted && roll === 6) keepTurn = true;
+
+        if (!keepTurn) {
+            this.passTurn();
+        } else {
+            this.updateLogs(`${currentP.name} rolls again!`, null);
             this.broadcastIfHost();
         }
+
     } catch (e) {
         console.error('Critical Error in processDiceRoll', e);
-        this.broadcastIfHost(); // Try to sync anyway
+        this.broadcastIfHost(); 
     }
+  }
+
+  // Helpers
+  private updatePlayerState(playerId: number, changes: Partial<Player>) {
+      this.state.update(s => ({
+          ...s,
+          players: s.players.map(p => p.id === playerId ? { ...p, ...changes } : p)
+      }));
+  }
+
+  private updateLogs(msg: string, roll: number | null) {
+      this.state.update(s => ({
+          ...s,
+          logs: [msg, ...s.logs].slice(0, 15),
+          lastDiceRoll: roll !== null ? roll : s.lastDiceRoll
+      }));
+  }
+
+  private updateCommentary(c: string) {
+      if(c) {
+          this.state.update(s => ({ ...s, commentary: c }));
+          this.broadcastIfHost();
+      }
   }
 
   private passTurn() {
     this.state.update(s => {
         const nextIndex = (s.currentPlayerIndex + 1) % s.players.length;
-        console.log(`Passing Turn. Old: ${s.currentPlayerIndex} -> New: ${nextIndex}. Players: ${s.players.length}`);
-        return {
-            ...s,
-            currentPlayerIndex: nextIndex
-        };
+        return { ...s, currentPlayerIndex: nextIndex };
     });
     this.broadcastIfHost();
-  }
-
-  restartGame() {
-    // Client sends request to host
-    if (this.onlineService.isConnected() && !this.onlineService.isHost()) {
-        this.onlineService.sendAction('RESTART');
-        return;
-    }
-    this.processRestartGame();
   }
 
   private processRestartGame() {
     this.state.update(s => ({
       ...s,
-      players: s.players.map(p => ({ ...p, position: 0, hasStarted: false, skipNextTurn: false })),
+      players: s.players.map(p => ({ 
+          ...p, 
+          position: 0, 
+          hasStarted: false, 
+          reachedTop: false, 
+          skipNextTurn: false 
+      })),
       currentPlayerIndex: 0,
       gameStatus: 'playing',
       lastDiceRoll: null,
@@ -440,20 +466,5 @@ export class GameService {
       commentary: 'New game begun!'
     }));
     this.broadcastIfHost();
-  }
-
-  resetToSetup() {
-      // Setup reset usually drops connection, handled by simple state reset
-      this.state.set({
-        players: [],
-        currentPlayerIndex: 0,
-        gameStatus: 'setup',
-        lastDiceRoll: null,
-        commentary: 'Setup your new game.',
-        winner: null,
-        logs: []
-      });
-      // We do not broadcast resetToSetup usually as it kills the game, but if we wanted to:
-      this.broadcastIfHost();
   }
 }
